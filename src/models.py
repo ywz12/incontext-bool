@@ -218,6 +218,39 @@ def get_relevant_baselines(task_name, n_dims):
 			(AveragingModel, {}),
 			(NullClassifier, {}),
 		],
+		#TDhomogenous
+		"teach_tdhomogenous": [
+			(NNModel, {"n_neighbors": 3}),
+			(AveragingModel, {}),
+			(NullClassifier, {}),
+		],
+		#PBTDhomogenous0
+		"teach_pbtdhomogenous0": [
+			(NNModel, {"n_neighbors": 3}),
+			(AveragingModel, {}),
+			(NullClassifier, {}),
+		],
+
+			#PBTDhomogenous0
+		"pbtdhomogenous0": [
+			(NNModel, {"n_neighbors": 3}),
+			(AveragingModel, {}),
+			(NullClassifier, {}),
+		],
+		#pbtdinhomogenousb
+		"teach_pbtdinhomogenousb": [
+			(NNModel, {"n_neighbors": 3}),
+			(AveragingModel, {}),
+			(NullClassifier, {}),
+		],
+			#pbtdinhomogenousb
+		"pbtdinhomogenousb": [
+			(NNModel, {"n_neighbors": 3}),
+			(AveragingModel, {}),
+			(NullClassifier, {}),
+		],
+
+
 		"majority": [
 			# (NNModel, {"n_neighbors": 3}),
 			(NNModel, {"n_neighbors": 1}),
