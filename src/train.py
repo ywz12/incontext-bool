@@ -311,7 +311,8 @@ def main(args):
 
 	
 
-	device = torch.device("cuda:{}".format(args.gpu))
+	# device = torch.device("cuda:{}".format(args.gpu))
+	device = torch.device("mps".format(args.gpu))
 
 	model = build_model(args)
 	model.to(device)
