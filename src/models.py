@@ -218,12 +218,19 @@ def get_relevant_baselines(task_name, n_dims):
 			(AveragingModel, {}),
 			(NullClassifier, {}),
 		],
-		#TDhomogenous
+		#teach_TDhomogenous
 		"teach_tdhomogenous": [
 			(NNModel, {"n_neighbors": 3}),
 			(AveragingModel, {}),
 			(NullClassifier, {}),
 		],
+	    #TDhomogenous
+		"teach_tdhomogenous": [
+			(NNModel, {"n_neighbors": 3}),
+			(AveragingModel, {}),
+			(NullClassifier, {}),
+		],
+
 		#PBTDhomogenous0
 		"teach_pbtdhomogenous0": [
 			(NNModel, {"n_neighbors": 3}),
@@ -374,11 +381,29 @@ class TransformerModel(nn.Module):
 			inds = torch.tensor(inds)
 			if max(inds) >= ys.shape[1] or min(inds) < 0:
 				raise ValueError("inds contain indices where xs and ys are not defined")
-		zs = self._combine(xs, ys)        
-		embeds = self._read_in(zs)
-		output = self._backbone(inputs_embeds=embeds).last_hidden_state
-		prediction = self._read_out(output)
-		return prediction[:, ::2, 0][:, inds]  # predict only on xs
+		prediction = [] 
+		common_xs = xs[:, :2]
+		common_ys = ys[:, :2]
+		for i in inds:
+			if i < 2:
+				xs_slice = xs[:, :i + 1]
+				ys_slice = ys[:, :i + 1]
+				
+			else:
+				new_xs = xs[:, i:i + 1]
+				new_ys = ys[:, i:i + 1]
+				xs_slice = torch.cat((common_xs, new_xs), dim=1)
+				ys_slice = torch.cat((common_ys, new_ys), dim=1)
+				
+			zs = self._combine(xs_slice, ys_slice)
+			embeds = self._read_in(zs)
+			output = self._backbone(inputs_embeds=embeds).last_hidden_state
+			pred = self._read_out(output)
+			pred_selected = pred[:, ::2, 0]
+			pred_selected = pred_selected[:, min(i, 2):min(i + 1, 3)]    
+            #print(f"Prediction shape at index {i}: {pred_selected.shape}")
+			prediction.append(pred_selected)
+		return(torch.cat(prediction, dim=1))
 	
 	def get_attns(self, xs, ys, inds=None):
 		if inds is None:

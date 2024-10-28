@@ -60,6 +60,7 @@ def get_task_sampler(
 ):
     task_names_to_classes = {
         "teach_tdhomogenous":teach_TDhomogenous,
+        "tdhomogenous": TDhomogenous,
         "teach_pbtdhomogenous0":teach_PBTDhomogenous0,
         "pbtdhomogenous0":PBTDhomogenous0,
         "teach_pbtdinhomogenousb":teach_PBTDinhomogenousb,
@@ -95,11 +96,9 @@ class teach_TDhomogenous(Task):
 
         # Define w_b based on pool_dict and seeds, similar to LinearRegression
         if pool_dict is None and seeds is None:
-            self.w_b = torch.zeros(self.b_size, self.n_dims, 1, dtype=torch.float)
-
-            for i in range(self.b_size):
-                # 随机选择一个维度，将该维度置为1，其余维度为0
-                self.w_b[i, 0, 0] = 1.0
+            self.w_b = torch.randn(self.b_size, self.n_dims, 1, dtype=torch.float)
+            
+            self.w_b = torch.nn.functional.normalize(self.w_b, p=2, dim=1)
 
         elif seeds is not None:
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1)
@@ -107,32 +106,49 @@ class teach_TDhomogenous(Task):
             assert len(seeds) == self.b_size
             for i, seed in enumerate(seeds):
                 generator.manual_seed(seed)
-                # 根据种子随机选择一个维度，将该维度置为1
-                random_index = torch.randint(0, self.n_dims, (1,), generator=generator)
-                self.w_b[i, random_index, 0] = 1.0
+               
+                self.w_b[i] = torch.nn.functional.normalize(w, p=2, dim=0)
         else:
             assert "w" in pool_dict
             indices = torch.randperm(len(pool_dict["w"]))[:b_size]
             self.w_b = pool_dict["w"][indices]
+        
+        # Construct orthogonal matrices A_b for each task
+        self.A_b = [self.construct_orthogonal_matrix(self.w_b[i], self.n_dims) for i in range(self.b_size)]
+
+    def construct_orthogonal_matrix(self, w, n_dims):
+        w = w.squeeze()
+        e1 = torch.zeros(n_dims)
+        e1[0] = 1.0
+
+        # Compute Householder vector
+        u = w - e1
+        u = u / torch.norm(u)
+
+         # Householder matrix H = I - 2 * (u * u^T)
+        H = torch.eye(n_dims) - 2 * torch.outer(u, u)
+
+        return H
+
 
     def sample_xs(self, n_points, b_size):
         """Sample xs for each batch."""
         xs_b = []
         for i in range(b_size):
-            #A = self.A_b[i]
+            A = self.A_b[i]
             e1 = torch.zeros(self.n_dims)
             e1[0] = 1
 
             e_is = torch.eye(self.n_dims)[1:]
             u = -e_is.sum(dim=0)
 
-            #A_T_e1 = A.T @ e1
-            #A_T_e1 = A_T_e1.unsqueeze(0).unsqueeze(0)
+            A_T_e1 = A.T @ e1
+            A_T_e1 = A_T_e1.unsqueeze(0).unsqueeze(0)
 
-            #A_T_eis = (A.T @ e_is.T).unsqueeze(0).unsqueeze(0)
-            #A_T_u = (A.T @ u).unsqueeze(0).unsqueeze(0)
+            A_T_eis = (A.T @ e_is.T).unsqueeze(0).unsqueeze(0)
+            A_T_u = (A.T @ u).unsqueeze(0).unsqueeze(0)
 
-            T = torch.cat([e_is, u, e1], dim=1)
+            T = torch.cat([A_T_eis, A_T_e1, A_T_u], dim=1)
             T_size = T.shape[1]
             num_random_points = n_points - T_size
             random_xs = torch.randn(num_random_points, self.n_dims)  # 剩下部分随机生成
@@ -154,11 +170,8 @@ class teach_TDhomogenous(Task):
 
     @staticmethod
     def generate_pool_dict(n_dims, num_tasks, **kwargs):
-        w = torch.zeros(num_tasks, n_dims, 1)
-        for i in range(num_tasks):
-            # 随机选择一个维度，将该维度置为1
-            #random_index = torch.randint(0, n_dims, (1,))
-            w[i, 0, 0] = 1.0
+        w = torch.randn(num_tasks, n_dims, 1)
+        w = torch.nn.functional.normalize(w, p=2, dim=1)  # Normalize each w
         return {"w": w}
 
     @staticmethod
@@ -170,6 +183,67 @@ class teach_TDhomogenous(Task):
         return cross_entropy
 
 
+class TDhomogenous(Task):
+    def __init__(self, n_dims, b_size, pool_dict=None, seeds=None, scale=1):
+        """scale: a constant by which to scale the randomly sampled weights."""
+        super(TDhomogenous, self).__init__(n_dims, b_size, pool_dict, seeds)
+        self.scale = scale
+
+        # Define w_b based on pool_dict and seeds, similar to LinearRegression
+        if pool_dict is None and seeds is None:
+            self.w_b = torch.randn(self.b_size, self.n_dims, 1, dtype=torch.float)
+            # 对每个随机生成的向量进行归一化操作
+            self.w_b = torch.nn.functional.normalize(self.w_b, p=2, dim=1)
+
+        elif seeds is not None:
+            self.w_b = torch.zeros(self.b_size, self.n_dims, 1)
+            generator = torch.Generator()
+            assert len(seeds) == self.b_size
+            for i, seed in enumerate(seeds):
+                generator.manual_seed(seed)
+                w = torch.randn(self.n_dims, 1, generator=generator)
+                # 对生成的向量进行归一化并赋值给对应的 batch
+                self.w_b[i] = torch.nn.functional.normalize(w, p=2, dim=0)
+        else:
+            assert "w" in pool_dict
+            indices = torch.randperm(len(pool_dict["w"]))[:b_size]
+            self.w_b = pool_dict["w"][indices]
+        
+     
+    def sample_xs(self, n_points, b_size):
+        """Sample xs for each batch, similar to TDhomogeneous."""
+        xs_b = []
+        for i in range(b_size):
+            xs = torch.randn(n_points, self.n_dims) 
+
+            xs_b.append(xs.unsqueeze(0))
+
+        # Stack all batches
+        xs_b = torch.cat(xs_b, dim=0)
+        return xs_b
+
+    def evaluate(self, xs_b):
+        """Evaluate xs_b using the batch of w_b."""
+        ys_b = torch.zeros(xs_b.size(0), xs_b.size(1))
+        for i in range(xs_b.size(0)):
+            w = self.w_b[i].to(xs_b.device)
+            ys_b[i] = (xs_b[i] @ w).squeeze().sign()
+        return ys_b
+
+    @staticmethod
+    def generate_pool_dict(n_dims, num_tasks, **kwargs):
+        w = torch.randn(num_tasks, n_dims, 1)
+        w = torch.nn.functional.normalize(w, p=2, dim=1)  # Normalize each w
+        return {"w": w}
+
+    @staticmethod
+    def get_metric():
+        return accuracy
+
+    @staticmethod
+    def get_training_metric():
+        return cross_entropy
+
 class teach_PBTDhomogenous0(Task):
     def __init__(self, n_dims, b_size, pool_dict=None, seeds=None, scale=1):
         """scale: a constant by which to scale the randomly sampled weights."""
@@ -178,32 +252,30 @@ class teach_PBTDhomogenous0(Task):
 
         # Define w_b based on pool_dict and seeds, but using the modified logic for the last two dimensions
         if pool_dict is None and seeds is None:
-            # 直接生成 (self.b_size, self.n_dims, 1) 大小的权重矩阵
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1, dtype=torch.float)
             
             for i in range(self.b_size):
-                # 随机生成最后一维在 [0, 1] 之间
+                #last  dimesion
                 last_dim = torch.rand(1)
-                # 倒数第二维为 sqrt(1 - 最后一维的平方)
+                #last two dimension
                 second_last_dim = torch.sqrt(1 - last_dim ** 2)
-                # 将倒数两维填入 w_b，其他维度为 0
+                
                 self.w_b[i, -1, 0] = last_dim
                 self.w_b[i, -2, 0] = second_last_dim
-                # 其余维度保持为 0
         elif seeds is not None:
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1)
             generator = torch.Generator()
             assert len(seeds) == self.b_size
             for i, seed in enumerate(seeds):
                 generator.manual_seed(seed)
-                # 随机生成最后一维在 [0, 1] 之间
+               
                 last_dim = torch.rand(1, generator=generator)
-                # 倒数第二维为 sqrt(1 - 最后一维的平方)
+                
                 second_last_dim = torch.sqrt(1 - last_dim ** 2)
-                # 将倒数两维填入 w_b，其他维度为 0
+             
                 self.w_b[i, -1, 0] = last_dim
                 self.w_b[i, -2, 0] = second_last_dim
-                # 其余维度保持为 0
+             
         else:
             assert "w" in pool_dict
             indices = torch.randperm(len(pool_dict["w"]))[:b_size]
@@ -234,6 +306,7 @@ class teach_PBTDhomogenous0(Task):
         
             # Generate random samples for the remaining points
             random_xs = torch.randn(num_random_points, self.n_dims) 
+            random_xs = torch.nn.functional.normalize(random_xs, p=2, dim=1) 
 
             # Combine T and random samples
             xs = torch.cat([T, random_xs], dim=0)
@@ -257,14 +330,14 @@ class teach_PBTDhomogenous0(Task):
         """Generate a pool dictionary with modified w values."""
         w = torch.zeros(num_tasks, n_dims, 1)
         for i in range(num_tasks):
-            # 随机生成最后一维在 [0, 1] 之间
+            
             last_dim = torch.rand(1)
-            # 倒数第二维为 sqrt(1 - 最后一维的平方)
+            
             second_last_dim = torch.sqrt(1 - last_dim ** 2)
-            # 将倒数两维填入 w_b，其他维度为 0
+ 
             w[i, -1, 0] = last_dim
             w[i, -2, 0] = second_last_dim
-            # 其余维度保持为 0
+      
         return {"w": w}
 
     @staticmethod
@@ -275,6 +348,7 @@ class teach_PBTDhomogenous0(Task):
     def get_training_metric():
         return cross_entropy
 
+#train with random data(normalized)
 class PBTDhomogenous0(Task):
     def __init__(self, n_dims, b_size, pool_dict=None, seeds=None, scale=1):
         """scale: a constant by which to scale the randomly sampled weights."""
@@ -283,51 +357,53 @@ class PBTDhomogenous0(Task):
 
         # Define w_b based on pool_dict and seeds, but using the modified logic for the last two dimensions
         if pool_dict is None and seeds is None:
-            # 直接生成 (self.b_size, self.n_dims, 1) 大小的权重矩阵
+       
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1, dtype=torch.float)
             
             for i in range(self.b_size):
-                # 随机生成最后一维在 [0, 1] 之间
+                
                 last_dim = torch.rand(1)
-                # 倒数第二维为 sqrt(1 - 最后一维的平方)
+               
                 second_last_dim = torch.sqrt(1 - last_dim ** 2)
-                # 将倒数两维填入 w_b，其他维度为 0
+               
                 self.w_b[i, -1, 0] = last_dim
                 self.w_b[i, -2, 0] = second_last_dim
-                # 其余维度保持为 0
+               
         elif seeds is not None:
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1)
             generator = torch.Generator()
             assert len(seeds) == self.b_size
             for i, seed in enumerate(seeds):
                 generator.manual_seed(seed)
-                # 随机生成最后一维在 [0, 1] 之间
+               
                 last_dim = torch.rand(1, generator=generator)
-                # 倒数第二维为 sqrt(1 - 最后一维的平方)
+    
                 second_last_dim = torch.sqrt(1 - last_dim ** 2)
-                # 将倒数两维填入 w_b，其他维度为 0
+            
                 self.w_b[i, -1, 0] = last_dim
                 self.w_b[i, -2, 0] = second_last_dim
-                # 其余维度保持为 0
+           
         else:
             assert "w" in pool_dict
             indices = torch.randperm(len(pool_dict["w"]))[:b_size]
             self.w_b = pool_dict["w"][indices]
 
     def sample_xs(self, n_points, b_size):
-        """Sample xs for each batch, similar to TDhomogeneous."""
         xs_b = []
-        for i in range(b_size):
+        for _ in range(b_size):
             xs = torch.randn(n_points, self.n_dims) 
-
             xs_b.append(xs.unsqueeze(0))
+
+          #randomized
+        xs_b = torch.nn.functional.normalize(xs_b, p=2, dim = 1)
+
 
         # Stack all batches
         xs_b = torch.cat(xs_b, dim=0)
         return xs_b
 
     def evaluate(self, xs_b):
-        """Evaluate xs_b using the batch of w_b."""
+
         ys_b = torch.zeros(xs_b.size(0), xs_b.size(1))
         for i in range(xs_b.size(0)):
             w = self.w_b[i].to(xs_b.device)
@@ -336,17 +412,17 @@ class PBTDhomogenous0(Task):
 
     @staticmethod
     def generate_pool_dict(n_dims, num_tasks, **kwargs):
-        """Generate a pool dictionary with modified w values."""
+ 
         w = torch.zeros(num_tasks, n_dims, 1)
         for i in range(num_tasks):
-            # 随机生成最后一维在 [0, 1] 之间
+   
             last_dim = torch.rand(1)
-            # 倒数第二维为 sqrt(1 - 最后一维的平方)
+  
             second_last_dim = torch.sqrt(1 - last_dim ** 2)
-            # 将倒数两维填入 w_b，其他维度为 0
+
             w[i, -1, 0] = last_dim
             w[i, -2, 0] = second_last_dim
-            # 其余维度保持为 0
+
         return {"w": w}
 
     @staticmethod
@@ -363,59 +439,56 @@ class teach_PBTDinhomogenousb(Task):
         super(teach_PBTDinhomogenousb, self).__init__(n_dims, b_size, pool_dict, seeds)
         self.scale = scale
 
-        # 定义 w_b 基于 pool_dict 和 seeds
+
         if pool_dict is None and seeds is None:
-            # 直接生成 (self.b_size, self.n_dims, 1) 大小的权重矩阵，满足最后三维规则
+            #generate w satisify that last three diemsions are not equal 0
+
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1, dtype=torch.float)
+            self.b_b = torch.zeros(self.b_size, dtype=torch.float)
             
             for i in range(self.b_size):
-                # 最后一维在 (0, 1) 内
-                last_dim = torch.rand(1).item()
-
-                # 倒数第二维在 (0, 1 - 最后一维) 内
-                second_last_dim = torch.rand(1).item() * (1 - last_dim)
-
-                # 倒数第三维为 sqrt(1 - 最后两维的平方和)
-                third_last_dim = torch.sqrt(torch.tensor(1 - last_dim**2 - second_last_dim**2)).item()
-
-                # 将这些值赋给最后三维
-                self.w_b[i, -1, 0] = last_dim
-                self.w_b[i, -2, 0] = second_last_dim
-                self.w_b[i, -3, 0] = third_last_dim
+                # generate 3 dimensional vector with Guassian distribution
+                random_vec = torch.randn(3)
+                # normalized
+                random_vec = random_vec / torch.norm(random_vec, p=2)
+                #fill in weight vector
+                self.w_b[i, -1, 0] = random_vec[0]  
+                self.w_b[i, -2, 0] = random_vec[1]  
+                self.w_b[i, -3, 0] = random_vec[2] 
+                #generate b from -1， 1
+                self.b_b[i] = torch.randint(0, 2, (1,)).item() * 2 - 1
 
         elif seeds is not None:
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1)
+            self.b_b = torch.zeros(self.b_size, dtype=torch.float)
             generator = torch.Generator()
             assert len(seeds) == self.b_size
             for i, seed in enumerate(seeds):
                 generator.manual_seed(seed)
 
-                # 随机生成遵循规则的最后三维
-                last_dim = torch.rand(1, generator=generator).item()
-                second_last_dim = torch.rand(1, generator=generator).item() * (1 - last_dim)
-                third_last_dim = torch.sqrt(torch.tensor(1 - last_dim**2 - second_last_dim**2)).item()
+                # generate 3 dimensional vector with Guassian distribution
+                random_vec = torch.randn(3)
+                # normalized
+                random_vec = random_vec / torch.norm(random_vec, p=2)
+                #fill in weight vector
+                self.w_b[i, -1, 0] = random_vec[0]  
+                self.w_b[i, -2, 0] = random_vec[1]  
+                self.w_b[i, -3, 0] = random_vec[2] 
+                #generate b from -1， 1
+                self.b_b[i] = torch.randint(0, 2, (1,)).item() * 2 - 1
 
-                # 将这些值赋给最后三维
-                self.w_b[i, -1, 0] = last_dim
-                self.w_b[i, -2, 0] = second_last_dim
-                self.w_b[i, -3, 0] = third_last_dim
 
         else:
-            # 使用 pool_dict 中的 w 值
             assert "w" in pool_dict
             indices = torch.randperm(len(pool_dict["w"]))[:b_size]
             self.w_b = pool_dict["w"][indices]
 
-        # 为每个任务生成偏差 b_b，取值范围为 {1, -1}
-        self.b_b = torch.randint(0, 2, (self.b_size,)) * 2 - 1
-
-     
 
     def sample_xs(self, n_points, b_size):
         """Sample xs for each batch."""
         xs_b = []
         for i in range(b_size):
-            #A = self.A_b[i]
+
             e_d = torch.zeros(self.n_dims)
             e_d[-1] = 1
 
@@ -451,6 +524,7 @@ class teach_PBTDinhomogenousb(Task):
         
             # Generate random samples for the remaining points
             random_xs = torch.randn(num_random_points, self.n_dims)  # Randomly generate remaining samples
+            random_xs = torch.nn.functional.normalize(random_xs, p=2, dim=1) 
 
             # Combine T and random samples
             xs = torch.cat([T.squeeze(0), random_xs], dim=0)
@@ -476,18 +550,15 @@ class teach_PBTDinhomogenousb(Task):
         w = torch.zeros(num_tasks, n_dims, 1)  # Initialize w as all zeros
 
         for i in range(num_tasks):
-          # 1. 随机生成最后一维在 (0, 1) 之间
-          last_dim = torch.rand(1).item()
-          # 2. 倒数第二维在 (0, 1 - 最后一维) 之间生成
-          second_last_dim = torch.rand(1).item() * (1 - last_dim)
-          # 3. 倒数第三维为 sqrt(1 - 最后两维的平方和)
-          third_last_dim = torch.sqrt(torch.tensor(1 - last_dim**2 - second_last_dim**2)).item()
-          # 将这三个维度的值赋给最后三维
-          w[i, -1, 0] = last_dim
-          w[i, -2, 0] = second_last_dim
-          w[i, -3, 0] = third_last_dim
+          # generate 3 dimensional vector with Guassian distribution
+            random_vec = torch.randn(3)
+            # normalized
+            random_vec = random_vec / torch.norm(random_vec, p=2)
+            #fill in weight vector
+            w[i, -1, 0] = random_vec[0]  
+            w[i, -2, 0] = random_vec[1]  
+            w[i, -3, 0] = random_vec[2] 
 
-        # 其余维度默认已经是 0，无需修改
 
         return {"w": w}
 
@@ -501,65 +572,61 @@ class teach_PBTDinhomogenousb(Task):
 
 class PBTDinhomogenousb(Task):
     def __init__(self, n_dims, b_size, pool_dict=None, seeds=None, scale=1):
-        """scale: a constant by which to scale the randomly sampled weights."""
         super(PBTDinhomogenousb, self).__init__(n_dims, b_size, pool_dict, seeds)
         self.scale = scale
 
-        # 定义 w_b 基于 pool_dict 和 seeds
         if pool_dict is None and seeds is None:
-            # 直接生成 (self.b_size, self.n_dims, 1) 大小的权重矩阵，满足最后三维规则
+            # weight
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1, dtype=torch.float)
+            self.b_b = torch.zeros(self.b_size, dtype=torch.float)
             
             for i in range(self.b_size):
-                # 最后一维在 (0, 1) 内
-                last_dim = torch.rand(1).item()
-
-                # 倒数第二维在 (0, 1 - 最后一维) 内
-                second_last_dim = torch.rand(1).item() * (1 - last_dim)
-
-                # 倒数第三维为 sqrt(1 - 最后两维的平方和)
-                third_last_dim = torch.sqrt(torch.tensor(1 - last_dim**2 - second_last_dim**2)).item()
-
-                # 将这些值赋给最后三维
-                self.w_b[i, -1, 0] = last_dim
-                self.w_b[i, -2, 0] = second_last_dim
-                self.w_b[i, -3, 0] = third_last_dim
+                # generate 3 dimensional vector with Guassian distribution
+                random_vec = torch.randn(3)
+                # normalized
+                random_vec = random_vec / torch.norm(random_vec, p=2)
+                #fill in weight vector
+                self.w_b[i, -1, 0] = random_vec[0]  
+                self.w_b[i, -2, 0] = random_vec[1]  
+                self.w_b[i, -3, 0] = random_vec[2] 
+                #generate b from -1， 1
+                self.b_b[i] = torch.randint(0, 2, (1,)).item() * 2 - 1
 
         elif seeds is not None:
             self.w_b = torch.zeros(self.b_size, self.n_dims, 1)
+            self.b_b = torch.zeros(self.b_size, dtype=torch.float)
             generator = torch.Generator()
             assert len(seeds) == self.b_size
             for i, seed in enumerate(seeds):
                 generator.manual_seed(seed)
 
-                # 随机生成遵循规则的最后三维
-                last_dim = torch.rand(1, generator=generator).item()
-                second_last_dim = torch.rand(1, generator=generator).item() * (1 - last_dim)
-                third_last_dim = torch.sqrt(torch.tensor(1 - last_dim**2 - second_last_dim**2)).item()
-
-                # 将这些值赋给最后三维
-                self.w_b[i, -1, 0] = last_dim
-                self.w_b[i, -2, 0] = second_last_dim
-                self.w_b[i, -3, 0] = third_last_dim
+                # generate 3 dimensional vector with Guassian distribution
+                random_vec = torch.randn(3)
+                # normalized
+                random_vec = random_vec / torch.norm(random_vec, p=2)
+                #fill in weight vector
+                self.w_b[i, -1, 0] = random_vec[0]  
+                self.w_b[i, -2, 0] = random_vec[1]  
+                self.w_b[i, -3, 0] = random_vec[2] 
+                #generate b from -1， 1
+                self.b_b[i] = torch.randint(0, 2, (1,)).item() * 2 - 1
 
         else:
-            # 使用 pool_dict 中的 w 值
             assert "w" in pool_dict
             indices = torch.randperm(len(pool_dict["w"]))[:b_size]
             self.w_b = pool_dict["w"][indices]
-
-        # 为每个任务生成偏差 b_b，取值范围为 {1, -1}
-        self.b_b = torch.randint(0, 2, (self.b_size,)) * 2 - 1
-
      
 
     def sample_xs(self, n_points, b_size):
         """Sample xs for each batch."""
         xs_b = []
-        for i in range(b_size):
+        for _ in range(b_size):
             # Generate random samples for the remaining points
             xs = torch.randn(n_points, self.n_dims)  # Randomly generate remaining samples
             xs_b.append(xs.unsqueeze(0))
+        
+        #randomized
+        xs_b = torch.nn.functional.normalize(xs_b, p=2, dim = 1)
 
         # Stack all batches
         xs_b = torch.cat(xs_b, dim=0)
@@ -580,18 +647,14 @@ class PBTDinhomogenousb(Task):
         w = torch.zeros(num_tasks, n_dims, 1)  # Initialize w as all zeros
 
         for i in range(num_tasks):
-          # 1. 随机生成最后一维在 (0, 1) 之间
-          last_dim = torch.rand(1).item()
-          # 2. 倒数第二维在 (0, 1 - 最后一维) 之间生成
-          second_last_dim = torch.rand(1).item() * (1 - last_dim)
-          # 3. 倒数第三维为 sqrt(1 - 最后两维的平方和)
-          third_last_dim = torch.sqrt(torch.tensor(1 - last_dim**2 - second_last_dim**2)).item()
-          # 将这三个维度的值赋给最后三维
-          w[i, -1, 0] = last_dim
-          w[i, -2, 0] = second_last_dim
-          w[i, -3, 0] = third_last_dim
-
-        # 其余维度默认已经是 0，无需修改
+          # generate 3 dimensional vector with Guassian distribution
+            random_vec = torch.randn(3)
+            # normalized
+            random_vec = random_vec / torch.norm(random_vec, p=2)
+            #fill in weight vector
+            w[i, -1, 0] = random_vec[0]  
+            w[i, -2, 0] = random_vec[1]  
+            w[i, -3, 0] = random_vec[2] 
 
         return {"w": w}
 

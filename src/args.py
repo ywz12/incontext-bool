@@ -19,6 +19,7 @@ TASK_LIST = [
     "sparse_parity",
     "int_halfspace",
 	"teach_tdhomogenous",
+	"tdhomogenous",
 	"teach_pbtdhomogenous0",
 	"pbtdhomogenous0",
 	"teach_pbtdinhomogenousb",
@@ -86,8 +87,8 @@ def build_parser():
 	parser.set_defaults(analyze=False)
 
 	# Curriculum
-	parser.add_argument('-curriculum_dims_start', type=int, default=28, help='initial parameter')
-	parser.add_argument('-curriculum_dims_end', type=int, default=28, help='limit of final value')
+	parser.add_argument('-curriculum_dims_start', type=int, default=8, help='initial parameter')
+	parser.add_argument('-curriculum_dims_end', type=int, default=8, help='limit of final value')
 	parser.add_argument('-curriculum_dims_inc', type=int, default=1, help='how much to increment each time')
 	parser.add_argument('-curriculum_dims_interval', type=int, default=2000, help='increment every how many steps')
 	

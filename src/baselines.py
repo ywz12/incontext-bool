@@ -36,6 +36,22 @@ class NNModel:
                 continue
             train_xs, train_ys = xs[:, :i], ys[:, :i]
             test_x = xs[:, i : i + 1]
+
+
+
+            #if i < 6:
+            #    if i == 0:
+            #        preds.append(torch.zeros_like(ys[:, 0]))  # predict zero for first point
+            #        continue
+            #    train_xs, train_ys = xs[:, :i], ys[:, :i]  # Use the data up to the current point
+            #else:
+                # From the 7th point onward, only use the first 6 points as training data
+            #    train_xs, train_ys = xs[:, :6], ys[:, :6]  # Fixed training data
+                # Test point is always the current point (i-th point)
+            #test_x = xs[:, i : i + 1]
+
+
+
             dist = (train_xs - test_x).square().sum(dim=2).sqrt()
 
             if self.weights == "uniform":
